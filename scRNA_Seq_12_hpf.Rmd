@@ -1,0 +1,234 @@
+---
+title: "scRNA-Seq 12 hpf"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r Loading required libraries}
+library(Seurat)
+library(SeuratObject)
+library(SeuratWrappers)
+library(patchwork)
+library(dplyr) 
+```
+
+
+```{r load cellranger output .h5 file for 12 hpf data}
+data_12hpf <- Read10X_h5("filtered_feature_bc_matrix.h5")
+head(data_12hpf)[1:5,1:5]
+```
+```{r Create seurat object}
+sobj_12hpf <- CreateSeuratObject(data_12hpf, min.cells = 3, min.features = 200, project = "12_hpf")
+sobj_12hpf
+```
+
+
+```{r Calculate mitochondrial and ribosomal pecentages and add calculated percentages to metadata}
+sobj_12hpf[["percent.mt"]] <- PercentageFeatureSet(sobj_12hpf, pattern = "^mt-")
+sobj_12hpf[["percent.rp"]] <- PercentageFeatureSet(sobj_12hpf, pattern = "^rp[sl]")
+sobj_12hpf[[]][1:5,]
+
+```
+```{r generate vln plot}
+vln.pl <- VlnPlot(sobj_12hpf, 
+                  features = c("nFeature_RNA", 
+                               "nCount_RNA", 
+                               "percent.mt", 
+                               "percent.rp"),
+                  layer = "counts")
+
+vln.pl + plot_layout(ncol = 4)
+```
+
+```{r subset cells and genes based on nFeature_RNA and percent.mt}
+sobj_12hpf <- subset(sobj_12hpf, 
+                     subset = nFeature_RNA > 300 & nFeature_RNA < 4000 & 
+                       percent.mt < 9)
+sobj_12hpf
+                      
+```
+
+```{r normalize data}
+sobj_12hpf <- NormalizeData(sobj_12hpf)
+
+```
+
+```{r identify 3000 highly variable genes}
+sobj_12hpf <- FindVariableFeatures(sobj_12hpf, 
+                                   nfeatures = 3000, 
+                                   selection.method = "vst")
+```
+
+```{r}
+top.100 <- head(VariableFeatures(sobj_12hpf), 100)
+hvg.pl <-VariableFeaturePlot(sobj_12hpf)
+hvg.pl<- LabelPoints(VariableFeaturePlot(sobj_12hpf), 
+                     points = top.100, repel = T)
+hvg.pl
+```
+
+```{r creating a vectors containingG1.S and  G2/M phase genes}
+G1.S <- c('mcm5',' pcna','tyms','mcm7','mcm4','rrm1','ung1','gins2','mcm6','cdca7','dtl','prim1','uhrf1',
+          'cenpu','gmnn','hells','ccne2','cdc6','rfc2','polr1b','nasp','rad51ap1','wdr76','slbp','ubr7',
+          'pold3','msh2','atad2','rad51','rrm2','cdc45','exo1','tipin','dscc1','blm','casbap2','usp1',
+          'clspn','pola1','chaf1b','mrpl36','e2f8')
+```
+
+```{r}
+G2M <- c( 'cdk1','ube2c','birc5','top2a','tpx2','cks2','nuf2','mki67','tacc3','cenpf','smc4','ckap4',
+          'kif11','cdca3','hmgb2','ndc80','cks1b','tmpo','pimreg',' ccnb2','ckap2l','ckap2','aurkb',
+          'bub1','anp32e','tubb4b','gtse1','kif20b','hjurp','jpt1','cdc20',	'ttk','cdc25c',	'kif2c',
+          'rangap1','ncapd2','dlgap5','cdca8','cdca2','ect2','kif23','hmmr','aurka','psrc1','anln',
+          'lbr','ckap5','cenpe','ctcf','nek2','g2e3','gas2l3','cbx5','cenpa')
+```
+
+```{r calculate cell cycle score}
+sobj_12hpf <- CellCycleScoring(sobj_12hpf, 
+                               s.features = G1.S,
+                               g2m.features = G2M, 
+                               set.ident = TRUE)
+sobj_12hpf[[]]
+```
+```{r scaling data}
+sobj_12hpf <- ScaleData(sobj_12hpf,
+                        vars.to.regress = c("percent.mt","S.Score", "G2M.Score"),
+                        features = rownames(sobj_12hpf) )
+
+```
+```{r perform PCA}
+sobj_12hpf <- RunPCA(sobj_12hpf)
+```
+
+```{r check for PCs}
+ElbowPlot(sobj_12hpf, ndims = 50)
+```
+
+```{r Run TSNE}
+sobj_12hpf <- RunTSNE(sobj_12hpf, dims = 1:40) 
+
+```
+
+```{r Run UMAP}
+sobj_12hpf <- RunUMAP(sobj_12hpf, dims = 1:40)
+```
+
+```{r find neighbors}
+sobj_12hpf <- FindNeighbors(sobj_12hpf)
+
+```
+
+```{r find clusters at resolution 3.5}
+sobj_12hpf <- FindClusters(sobj_12hpf, resolution=3.5)
+```
+
+```{r find all deg in all clusters}
+sobj_12hpf_deg <- FindAllMarkers(sobj_12hpf, 
+                                   only.pos=TRUE,
+                                   min.pct = 0.1, 
+                                   min.pct.diff = 0.1, 
+                                   logfc.threshold = 0.1)
+```
+
+```{r}
+sobj_12hpf_deg %>% mutate(pct.diff= (pct.1-pct.2)) %>% 
+                   group_by(cluster) %>% 
+                   arrange(desc(avg_log2FC),.by_group = TRUE)
+```
+
+```{r}
+write.csv(sobj_12hpf_deg, file = "sobj_12hpf_deg.csv")
+```
+
+
+```{r sunclustering cluster 21}
+sobj_12hpf <- FindSubCluster(sobj_12hpf,
+                                 cluster = 21, 
+                                 graph.name = "RNA_snn")
+
+```
+
+```{r check metadata for sub clustering colum called sub.cluster}
+sobj_12hpf[[]]
+```
+
+```{r set new sub.cluster data to Idents}
+Idents(sobj_12hpf) <- sobj_12hpf[[]]$sub.cluster
+```
+
+```{r re oder the cluster levels inclusding new sub cluster IDs}
+levels(sobj_12hpf) <- c('0','1','2','3','4','5','6','7','8','9','10',	
+                        '11','12','13','14','15','16','17','18','19','20',
+                        '21_0','21_1','21_2','22','23','24','25','26','27',
+                        '28','29','30','31','32','33','34','35','36','37','38',
+                        '39','40','41','42','43','44')
+```
+```{r}
+levels(sobj_12hpf)
+```
+
+
+```{r}
+ids.12 <- c('0'=	'Midbrain Neural Rod',
+            '1'=	'Midbrain Neural Rod',
+            '2'=	'Hindbrain Rhombomere 3',
+            '3'=	'MHB',
+            '4'=	'optic vesicle',
+            '5'=	'placode (lens)',
+            '6'=	'Dorsal Diencephalon',
+            '7'=	'optic vesicle',
+            '8'=	'optic vesicle',
+            '9'=	'optic vesicle',
+            '10'=	'Hindbrain Rhombomere 3',
+            '11'=	'neural crest ',
+            '12'=	'placode (lens)',
+            '13'=	'mesoderm',
+            '14'=	'rostral blood island (myeloid)',
+            '15'=	'Tel II',
+            '16'=	'Dorsal Diencephalon',
+            '17'=	'MHB',
+            '18'=	'epidermis',
+            '19'=	'Midbrain',
+            '20'=	'floor plate',
+            '21_0'=	'Hindbrain Rhombomere 5/6',
+            '21_1'=	'Prog(committed)',
+            '21_2'=	'Sensory Neurons (trigeminal)',
+            '22'=	'Tel I(neurons)',
+            '23'=	'neural crest ',
+            '24'=	'Ventral Midbrain',
+            '25'=	'placode (otic)',
+            '26'=	'prechordal plate/polster',
+            '27'=	'pharyngeal endoderm',
+            '28'=	'NA',
+            '29'=	'epidermis',
+            '30'=	'heart primordium',
+            '31'=	'optic vesicle',
+            '32'=	'placode (adenohypophyseal )',
+            '33'=	'Hindbrain Rhombomere 7',
+            '34'=	'mesoderm (head mesenchyme)',
+            '35'=	'mesoderm',
+            '36'=	'mesoderm',
+            '37'=	'epidermis',
+            '38'=	'adaxial cell',
+            '39'=	'prechordal plate/polster',
+            '40'=	'placode (lens)',
+            '41'=	'placode (olfactory; neurons)',
+            '42'=	'periderm',
+            '43'=	'notochord'
+           )
+```
+
+```{r rename cell clusters with cell types}
+sobj_12hpf_remame <- RenameIdents(sobj_12hpf, ids.12) 
+```
+
+```{r}
+DimPlot(sobj_12hpf_remame)+NoLegend()
+```
+
+```{r}
+saveRDS(sobj_12hpf_remame, file = "sobj_12hpf.res.3.5.rds")
+```
+
+
+
